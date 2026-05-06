@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # Conditional bootstrap admin: only run on a fresh install (no existing
-# admin row in ab_user). Once the first admin exists, manage further
-# accounts through the Superset UI (Settings → List Users) instead of
-# re-running fab create-admin on every deploy — that command never
-# updates an existing user's password and just litters the deploy log
-# with "Error! User already exists ..." each restart.
-USER_COUNT=$(superset fab list-users 2>/dev/null | grep -cE "^[[:space:]]*\|[[:space:]]*[0-9]" || echo 0)
-if [ "${USER_COUNT:-0}" -eq 0 ] && [ -n "$ADMIN_USERNAME" ] && [ -n "$ADMIN_PASSWORD" ]; then
+# user row). Once Superset has at least one user, deploys stop adding
+# dummy admins and stop spamming "Error! User already exists ..." into
+# the log. Manage further accounts through Settings → List Users in
+# the UI; ADMIN_USERNAME/PASSWORD env vars are now a fresh-install
+# convenience, not an active credential.
+USER_COUNT=$(superset fab list-users 2>/dev/null | grep -cE "^[[:space:]]*\|[[:space:]]*[0-9]")
+USER_COUNT=${USER_COUNT:-0}
+if [ "$USER_COUNT" -eq 0 ] 2>/dev/null && [ -n "$ADMIN_USERNAME" ] && [ -n "$ADMIN_PASSWORD" ]; then
     echo "No existing users found — bootstrapping initial admin '$ADMIN_USERNAME'"
     superset fab create-admin \
         --username "$ADMIN_USERNAME" \
@@ -25,5 +26,8 @@ superset db upgrade
 # setup roles and permissions
 superset superset init
 
-# Starting server
-/bin/sh -c /usr/bin/run-server.sh
+# Starting server (exec so gunicorn becomes PID 1 — Railway sees it
+# stay alive and routes traffic to it; without exec the wrapper shell
+# exits as soon as run-server.sh forks gunicorn into the background,
+# Railway calls that "container exited" and tears the service down.)
+exec /usr/bin/run-server.sh
